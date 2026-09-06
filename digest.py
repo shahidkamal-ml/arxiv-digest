@@ -88,7 +88,9 @@ SHORTLIST = 12             # top-scoring candidates handed to the novelty judge
 # Which model does the judging, when a key for it exists. Override either with
 # an env var of the same name if you want to change model without editing code.
 CLAUDE_MODEL = "claude-opus-5"
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-flash-latest"   # resolved against the live API; the
+                                       # "-latest" alias tracks Google's
+                                       # renames instead of going stale
 
 # Fallback when no LLM key is set. These score how a paper is *written*, which
 # is a weak proxy for whether the idea is new - abstracts are written to sound
