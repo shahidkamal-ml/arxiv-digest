@@ -61,6 +61,7 @@ NS = {"atom": "http://www.w3.org/2005/Atom"}
 PAGE_SIZE = 100
 REQUEST_DELAY = 3.0        # arXiv asks for ~3s between requests
 FETCH_ATTEMPTS = 3         # retries on 429/timeout, backing off 3s -> 6s
+TELEGRAM_LIMIT = 4096      # Telegram's hard cap on a single message
 
 
 def fetch_page(url):
@@ -294,26 +295,85 @@ def send_whatsapp(subject, papers):
     print(f"[ok] WhatsApp sent to {phone}")
 
 
+def send_telegram(subject, papers):
+    """
+    Telegram via a personal bot - official API, free, no per-message billing.
+    One-time setup: message @BotFather, /newbot, and it hands back a token.
+    Then message your new bot once so it is allowed to reply, and read the
+    chat id out of https://api.telegram.org/bot<TOKEN>/getUpdates.
+
+    Roomier than WhatsApp at 4096 characters, so a short abstract fits.
+    """
+    token = os.environ["TELEGRAM_TOKEN"]
+    chat_id = os.environ["TELEGRAM_CHAT_ID"]
+
+    parts = [f"<b>{html.escape(subject)}</b>", ""]
+    for i, p in enumerate(papers, 1):
+        abstract = p["abstract"]
+        if len(abstract) > 300:
+            abstract = abstract[:300].rsplit(" ", 1)[0] + "..."
+        block = (
+            f"{i}. <b>{html.escape(p['title'])}</b>\n"
+            f"{html.escape(abstract)}\n"
+            f"{html.escape(p['url'])}\n"
+        )
+        # Drop whole papers rather than character-clipping the tail: a cut
+        # landing inside "&amp;" or a <b> tag makes Telegram reject the lot
+        # with "can't parse entities". Two papers never come close anyway -
+        # this only matters if PAPERS_PER_RUN is raised a lot.
+        if sum(len(s) + 1 for s in parts) + len(block) > TELEGRAM_LIMIT:
+            print(f"[warn] Telegram: {len(papers) - i + 1} paper(s) did not fit",
+                  file=sys.stderr)
+            break
+        parts.append(block)
+
+    message = "\n".join(parts)
+
+    data = urllib.parse.urlencode({
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": "true",
+    }).encode()
+
+    request = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendMessage", data=data
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as resp:
+            resp.read()
+    except Exception as exc:
+        # The token sits in the URL path, and some urllib errors quote the URL
+        # back. Scrub it rather than risk printing it into the Actions log.
+        # `from None` drops the chained traceback, which quotes it too.
+        raise RuntimeError(str(exc).replace(token, "<TELEGRAM_TOKEN>")) from None
+
+    print(f"[ok] Telegram sent to chat {chat_id}")
+
+
 def missing_vars(*names):
     """Env vars that are unset or empty. Actions supplies "" for absent secrets."""
     return [n for n in names if not os.environ.get(n)]
 
 
-def deliver(subject, papers, text, html):
+def deliver(subject, papers, text, body):
     """
     Use whichever channels have credentials configured.
 
     Each channel is isolated: a half-configured or failing one reports itself
-    and lets the other still go out. Returns True if anything was delivered or
+    and lets the others still go out. Returns True if anything was delivered or
     printed, False if every configured channel failed - the caller uses that to
     decide whether these papers may be marked as sent.
     """
     attempted = False
     sent = False
 
+    # (label, env var that switches it on, also-required vars, sender)
     channels = [
         ("email", "SMTP_USER", ("SMTP_HOST", "SMTP_PASS"),
-         lambda: send_email(subject, text, html)),
+         lambda: send_email(subject, text, body)),
+        ("Telegram", "TELEGRAM_TOKEN", ("TELEGRAM_CHAT_ID",),
+         lambda: send_telegram(subject, papers)),
         ("WhatsApp", "WHATSAPP_APIKEY", ("WHATSAPP_PHONE",),
          lambda: send_whatsapp(subject, papers)),
     ]

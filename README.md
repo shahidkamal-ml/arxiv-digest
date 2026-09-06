@@ -38,6 +38,23 @@ For email (Gmail example):
 App Passwords require 2-Step Verification to be turned on, then are generated
 at myaccount.google.com → Security → App passwords.
 
+For Telegram, via your own bot (free, official API):
+
+| Secret | Value |
+| --- | --- |
+| `TELEGRAM_TOKEN` | the token @BotFather gives you |
+| `TELEGRAM_CHAT_ID` | your own chat id, a number |
+
+One-time setup: message **@BotFather** on Telegram, send `/newbot`, pick a name,
+and it replies with a token. Then send your new bot any message — a bot can't
+open a conversation with you — and open
+`https://api.telegram.org/bot<TOKEN>/getUpdates` in a browser. Your chat id is
+the `"chat":{"id":...}` number in the response.
+
+This is the lightest of the three to set up: no account to create, no 2FA, and
+the token only controls a bot that can message you, so it's worth far less than
+a Gmail App Password if it ever leaks.
+
 For WhatsApp, via CallMeBot (free, no registration):
 
 | Secret | Value |
@@ -49,8 +66,10 @@ One-time setup: save **+34 684 72 39 62** to your contacts, WhatsApp it
 `I allow callmebot to send me messages`, and it replies with your API key.
 If nothing arrives within two minutes, wait 24 hours and retry.
 
-Set either, or both. If neither is set, the script just prints the digest to
-the Actions log — useful for a first test.
+Set any combination of the three. If none are set, the script just prints the
+digest to the Actions log — useful for a first test. Each channel is
+independent: if one is half-configured or its service is down, the script says
+which secret is missing and still sends on the others.
 
 ### Why CallMeBot and not the official WhatsApp API
 
@@ -71,8 +90,10 @@ Meta, it's free **for personal use only**, and your message text passes through
 their server. For public arXiv titles and links that's harmless — don't route
 anything private through it.
 
-Gmail has none of these caveats and is the more reliable of the two. Running
-both, with WhatsApp as the ping and email as the readable copy, works well.
+Gmail has none of these caveats and is the most reliable of the three. Telegram
+is the middle ground: an official, free API with no billing and no templates,
+and a 4096-character limit that leaves room for a short abstract. Running
+Telegram as the phone ping and email as the readable copy works well.
 
 **3. Test it.** Actions tab → "Weekly paper digest" → Run workflow. Check the
 log output before trusting the cron.
