@@ -263,10 +263,21 @@ def render(papers):
 
 def send_email(subject, text, html):
     host = os.environ["SMTP_HOST"]
-    port = int(os.environ.get("SMTP_PORT", "465"))
+    raw_port = os.environ.get("SMTP_PORT") or "465"
     user = os.environ["SMTP_USER"]
     password = os.environ["SMTP_PASS"]
     to = os.environ.get("EMAIL_TO") or user
+
+    try:
+        port = int(raw_port.strip())
+    except ValueError:
+        # Actions masks secret values everywhere, so the bad value shows up as
+        # *** and the stock ValueError is unreadable. Say what is wrong instead.
+        raise RuntimeError(
+            "SMTP_PORT must be a number like 465 - the secret's value is not "
+            "one (a masked *** here usually means the secret name got pasted "
+            "into the value box)"
+        ) from None
 
     msg = EmailMessage()
     msg["Subject"] = subject
