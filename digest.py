@@ -26,30 +26,84 @@ from pathlib import Path
 # CONFIG - edit this block, everything else can stay as is
 # ----------------------------------------------------------------------------
 
-CATEGORIES = ["cs.CV", "cs.AI", "cs.LG"]
+CATEGORIES = ["cs.CV", "cs.AI", "cs.LG", "cs.CL"]
 
 # Keyword -> weight. Matched against lowercased title + abstract.
 # Title matches count double automatically.
 KEYWORDS = {
+    # world models
+    "world model": 8,
+    "intuitive physics": 6,
+    "physical reasoning": 5,
+    "physically grounded": 5,
+    "jepa": 5,
+    "predictive world": 5,
+    "learned simulator": 4,
+    "dynamics model": 4,
+    # video LLMs
+    "video language model": 8,
+    "video-language model": 8,
+    "video llm": 8,
+    "video-llm": 8,
+    "multimodal llm": 4,
+    "video question answering": 4,
+    # motion understanding
+    "motion understanding": 8,
+    "video understanding": 5,
+    "temporal reasoning": 5,
+    "video reasoning": 5,
     "long-horizon": 4,
-    "motion": 3,
-    "temporal reasoning": 3,
-    "video understanding": 3,
     "spatiotemporal": 3,
-    "video benchmark": 3,
-    "physics": 2,
-    "video": 2,
-    "benchmark": 2,
-    "vision-language": 2,
-    "action recognition": 2,
-    "dynamics": 1,
-    "evaluation": 1,
+    "temporal grounding": 3,
+    "object permanence": 4,
+    "counterfactual": 3,
+    "motion": 2,
+    "embodied": 2,
+    "video": 1,
 }
 
+# "world model" alone drags in web agents, RL planners and LLM reasoning work.
+# A paper has to be about video/motion at all to count, so require one of these.
+REQUIRE_ANY = ["video", "motion", "frame", "temporal", "dynamic", "visual",
+               "physical", "spatial"]
+
+# arXiv puts acceptances in <arxiv:comment>/<arxiv:journal_ref> when they exist,
+# which for brand-new preprints is usually not yet. Treated as a bonus, never a
+# filter - see README, gating on it sends nothing.
+VENUE_RE = re.compile(
+    r"\b(neurips|nips|iclr|icml|cvpr|eccv|iccv|acl|emnlp|naacl|tpami|siggraph)\b",
+    re.I,
+)
+VENUE_BONUS = 6
+
 # Drop anything scoring below this, even if it's the best of a weak week.
-MIN_SCORE = 4
+# Tuned against a 600-paper sample: 16 yields ~12 candidates a week, so there
+# is real competition for the 2 slots rather than "whatever cleared the bar".
+MIN_SCORE = 16
 
 PAPERS_PER_RUN = 1         # 1 per run x Mon/Fri = 2 a week
+SHORTLIST = 12             # top-scoring candidates handed to the novelty judge
+
+# Which model does the judging, when a key for it exists. Override either with
+# an env var of the same name if you want to change model without editing code.
+CLAUDE_MODEL = "claude-opus-5"
+GEMINI_MODEL = "gemini-2.5-flash"
+
+# Fallback when no LLM key is set. These score how a paper is *written*, which
+# is a weak proxy for whether the idea is new - abstracts are written to sound
+# novel. Good enough to break ties, not good enough to trust on its own.
+NOVELTY_HINTS = {
+    "we introduce": 3, "we propose a new": 3, "for the first time": 4,
+    "first work": 4, "rethinking": 3, "we challenge": 4, "counterintuitive": 4,
+    "surprisingly": 3, "emerges": 3, "new paradigm": 4, "fundamentally": 3,
+    "we show that": 2, "unlike prior": 2, "paradigm shift": 4,
+}
+INCREMENTAL_HINTS = {
+    "state-of-the-art": -3, "outperforms": -3, "we improve": -3,
+    "extends": -2, "fine-tun": -2, "we adapt": -2, "building upon": -3,
+    "simple modification": -3, "achieves competitive": -3,
+    "benchmark results show": -2, "extensive experiments": -2,
+}
 LOOKBACK_DAYS = 8          # comfortably covers the Mon/Fri gaps (3 and 4 days),
                            # so a slow stretch still has a pool to draw from.
                            # Overlap between runs is fine - dedupe handles it.
@@ -64,7 +118,10 @@ ARXIV_API = "https://export.arxiv.org/api/query"
 # scraper sends - and shared CI egress IPs make that worse. Identifying the
 # tool is what arXiv asks for, and is the difference between 200 and 429.
 USER_AGENT = "arxiv-digest/1.0 (+https://github.com/shahidkamal-ml/arxiv-digest)"
-NS = {"atom": "http://www.w3.org/2005/Atom"}
+NS = {
+    "atom": "http://www.w3.org/2005/Atom",
+    "arxiv": "http://arxiv.org/schemas/atom",   # comment, journal_ref
+}
 PAGE_SIZE = 100
 REQUEST_DELAY = 3.0        # arXiv asks for ~3s between requests
 FETCH_ATTEMPTS = 5         # retries on 429/timeout: 3s -> 6s -> 12s -> 24s
@@ -149,8 +206,8 @@ def fetch_recent():
 
 def parse_entry(entry):
     """Turn one Atom <entry> into a plain dict."""
-    def text(tag):
-        node = entry.find(f"atom:{tag}", NS)
+    def text(tag, ns="atom"):
+        node = entry.find(f"{ns}:{tag}", NS)
         return " ".join(node.text.split()) if node is not None and node.text else ""
 
     raw_id = text("id")
@@ -180,11 +237,19 @@ def parse_entry(entry):
         "authors": authors,
         "published": when,
         "url": f"https://arxiv.org/abs/{paper_id}",
+        # Where an acceptance is announced, when the authors bother to say.
+        "venue": (text("comment", "arxiv") + " " + text("journal_ref", "arxiv")).strip(),
     }
 
 
+def on_topic(paper):
+    """Is this about video/motion at all, or just a world model of something?"""
+    body = (paper["title"] + " " + paper["abstract"]).lower()
+    return any(term in body for term in REQUIRE_ANY)
+
+
 def score(paper):
-    """Weighted keyword match. Title hits count double."""
+    """Weighted keyword match. Title hits count double, acceptances get a bonus."""
     title = paper["title"].lower()
     body = title + " " + paper["abstract"].lower()
     total = 0
@@ -193,7 +258,143 @@ def score(paper):
             total += weight
         if kw in title:
             total += weight
+
+    if paper.get("venue") and VENUE_RE.search(paper["venue"]):
+        total += VENUE_BONUS
+
     return total
+
+
+JUDGE_PROMPT = """\
+You are triaging new arXiv preprints for a researcher who works on world \
+models, video LLMs, and motion understanding from video.
+
+They want genuinely new ideas. They do NOT want competent but incremental \
+work: a new benchmark number, another architecture tweak, a scaled-up \
+rerun, or a fine-tune of an existing model. Abstracts are written to sound \
+novel, so judge the actual claim, not the adjectives. Be sceptical - most \
+papers are incremental, and saying so is the useful answer.
+
+Rank these {n} papers, most genuinely novel first.
+
+{papers}
+
+Reply with one line per paper, best first, in exactly this format:
+NUMBER|one sentence on what is actually new, or why it is incremental
+
+No other text."""
+
+
+def judge_prompt(papers):
+    blocks = []
+    for i, p in enumerate(papers, 1):
+        abstract = p["abstract"]
+        if len(abstract) > 1200:
+            abstract = abstract[:1200].rsplit(" ", 1)[0] + "..."
+        blocks.append(f"[{i}] {p['title']}\n{abstract}")
+    return JUDGE_PROMPT.format(n=len(papers), papers="\n\n".join(blocks))
+
+
+def post_json(url, payload, headers, timeout=90):
+    """POST JSON, return parsed JSON. Keys travel in headers, never the URL."""
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        headers={"content-type": "application/json", **headers},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as resp:
+        return json.loads(resp.read())
+
+
+def ask_gemini(prompt):
+    key = os.environ["GEMINI_API_KEY"]
+    model = os.environ.get("GEMINI_MODEL") or GEMINI_MODEL
+    data = post_json(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        {"contents": [{"parts": [{"text": prompt}]}]},
+        {"x-goog-api-key": key},
+    )
+    parts = data["candidates"][0]["content"]["parts"]
+    return "".join(p.get("text", "") for p in parts)
+
+
+def ask_claude(prompt):
+    key = os.environ["ANTHROPIC_API_KEY"]
+    model = os.environ.get("CLAUDE_MODEL") or CLAUDE_MODEL
+    data = post_json(
+        "https://api.anthropic.com/v1/messages",
+        {
+            "model": model,
+            "max_tokens": 4000,
+            "messages": [{"role": "user", "content": prompt}],
+        },
+        {"x-api-key": key, "anthropic-version": "2023-06-01"},
+    )
+    if data.get("stop_reason") == "refusal":
+        raise RuntimeError("Claude declined to answer")
+    # content is a list of blocks. Thinking is on by default on current models,
+    # so content[0] is usually a thinking block - take the text ones.
+    return "".join(b.get("text", "") for b in data["content"] if b.get("type") == "text")
+
+
+def parse_ranking(reply, count):
+    """Pull '3|reason' lines out of the reply. Ignores anything malformed."""
+    order = []
+    for line in reply.splitlines():
+        match = re.match(r"\s*\[?(\d+)\]?\s*[|.:\-]\s*(.+)", line)
+        if not match:
+            continue
+        idx = int(match.group(1)) - 1
+        if 0 <= idx < count and idx not in [i for i, _ in order]:
+            order.append((idx, match.group(2).strip()))
+    return order
+
+
+def heuristic_novelty(paper):
+    body = (paper["title"] + " " + paper["abstract"]).lower()
+    return (sum(w for kw, w in NOVELTY_HINTS.items() if kw in body)
+            + sum(w for kw, w in INCREMENTAL_HINTS.items() if kw in body))
+
+
+def rank(papers):
+    """
+    Order by how genuinely novel the work looks, best first.
+
+    Tries whichever LLM has a key, then falls back to phrase heuristics. A
+    judge that errors, gets rate-limited or returns garbage must never take the
+    digest down - it just means a slightly worse ordering this run.
+    """
+    if len(papers) < 2:
+        return papers
+
+    judges = [("Gemini", "GEMINI_API_KEY", ask_gemini),
+              ("Claude", "ANTHROPIC_API_KEY", ask_claude)]
+
+    for label, key_var, ask in judges:
+        if not os.environ.get(key_var):
+            continue
+        try:
+            order = parse_ranking(ask(judge_prompt(papers)), len(papers))
+            if not order:
+                raise ValueError("no parseable ranking in the reply")
+        except Exception as exc:
+            print(f"[warn] {label} judge failed ({exc}) - trying next",
+                  file=sys.stderr)
+            continue
+
+        ranked = []
+        for idx, reason in order:
+            papers[idx]["reason"] = reason
+            ranked.append(papers[idx])
+        # Anything the judge silently dropped keeps its keyword order at the back.
+        ranked += [p for p in papers if p not in ranked]
+        print(f"[ok] ranked by {label}")
+        return ranked
+
+    configured = any(os.environ.get(v) for _, v, _ in judges)
+    print("[info] " + ("every judge failed" if configured else "no LLM key set")
+          + " - ranking by phrase heuristics", file=sys.stderr)
+    return sorted(papers, key=lambda p: -(p["score"] + heuristic_novelty(p)))
 
 
 def load_state():
@@ -216,14 +417,18 @@ def pick(papers, seen):
 
     candidates = [
         p for p in papers
-        if p["published"] >= cutoff and p["id"] not in seen_set
+        if p["published"] >= cutoff and p["id"] not in seen_set and on_topic(p)
     ]
     for p in candidates:
         p["score"] = score(p)
 
     candidates = [p for p in candidates if p["score"] >= MIN_SCORE]
     candidates.sort(key=lambda p: (-p["score"], -p["published"].timestamp()))
-    return candidates[:PAPERS_PER_RUN]
+
+    # Keywords decide what is on topic; the judge decides which is worth reading.
+    shortlist = candidates[:SHORTLIST]
+    print(f"[info] {len(shortlist)} candidates cleared MIN_SCORE={MIN_SCORE}")
+    return rank(shortlist)[:PAPERS_PER_RUN]
 
 
 def render(papers):
@@ -238,11 +443,13 @@ def render(papers):
         if len(abstract) > 700:
             abstract = abstract[:700].rsplit(" ", 1)[0] + "..."
 
+        why = p.get("reason", "")
         lines.append(
             f"{i}. {p['title']}\n"
             f"   {authors}\n"
-            f"   {p['url']}\n\n"
-            f"   {abstract}\n"
+            f"   {p['url']}\n"
+            + (f"\n   Why this one: {why}\n" if why else "")
+            + f"\n   {abstract}\n"
         )
         # Abstracts carry raw LaTeX, so &, < and > show up routinely and would
         # otherwise swallow the rest of the message in an HTML client.
@@ -251,7 +458,10 @@ def render(papers):
             f"<p style='margin:0;color:#555;font-size:14px'>{html.escape(authors)}</p>"
             f"<p style='margin:6px 0'>"
             f"<a href='{html.escape(p['url'])}'>{html.escape(p['url'])}</a></p>"
-            f"<p style='line-height:1.5'>{html.escape(abstract)}</p>"
+            + (f"<p style='margin:6px 0;padding:8px 12px;background:#f4f6f8;"
+               f"border-left:3px solid #888;line-height:1.45'>"
+               f"<b>Why this one:</b> {html.escape(why)}</p>" if why else "")
+            + f"<p style='line-height:1.5'>{html.escape(abstract)}</p>"
         )
 
     text = "\n".join(lines)
