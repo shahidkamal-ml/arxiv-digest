@@ -56,11 +56,17 @@ STATE_FILE = Path("sent.json")
 
 # ----------------------------------------------------------------------------
 
-ARXIV_API = "http://export.arxiv.org/api/query"
+ARXIV_API = "https://export.arxiv.org/api/query"
+
+# arXiv throttles hard on the default "Python-urllib/3.12" - it is what every
+# scraper sends - and shared CI egress IPs make that worse. Identifying the
+# tool is what arXiv asks for, and is the difference between 200 and 429.
+USER_AGENT = "arxiv-digest/1.0 (+https://github.com/shahidkamal-ml/arxiv-digest)"
 NS = {"atom": "http://www.w3.org/2005/Atom"}
 PAGE_SIZE = 100
 REQUEST_DELAY = 3.0        # arXiv asks for ~3s between requests
-FETCH_ATTEMPTS = 3         # retries on 429/timeout, backing off 3s -> 6s
+FETCH_ATTEMPTS = 5         # retries on 429/timeout: 3s -> 6s -> 12s -> 24s
+MAX_BACKOFF = 60.0         # ceiling per wait, including any Retry-After
 TELEGRAM_LIMIT = 4096      # Telegram's hard cap on a single message
 
 
@@ -72,14 +78,28 @@ def fetch_page(url):
     just times out. Back off and retry rather than treating either as a quiet
     week. Delays only grow - never retry faster than REQUEST_DELAY.
     """
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+
     for attempt in range(FETCH_ATTEMPTS):
         try:
-            with urllib.request.urlopen(url, timeout=60) as resp:
+            with urllib.request.urlopen(request, timeout=60) as resp:
                 return resp.read()
         except Exception as exc:
             if attempt == FETCH_ATTEMPTS - 1:
                 raise
-            wait = REQUEST_DELAY * (2 ** attempt)
+
+            wait = min(REQUEST_DELAY * (2 ** attempt), MAX_BACKOFF)
+
+            # On a 429 arXiv may say exactly how long to wait. Prefer that over
+            # our guess - backing off too little is what keeps you throttled.
+            retry_after = getattr(exc, "headers", None)
+            if retry_after is not None:
+                try:
+                    wait = max(wait, min(float(retry_after.get("Retry-After")),
+                                         MAX_BACKOFF))
+                except (TypeError, ValueError):
+                    pass
+
             print(f"[warn] {exc} - retrying in {wait:.0f}s", file=sys.stderr)
             time.sleep(wait)
 
