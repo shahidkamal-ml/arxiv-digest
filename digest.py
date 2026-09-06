@@ -49,7 +49,7 @@ KEYWORDS = {
 # Drop anything scoring below this, even if it's the best of a weak week.
 MIN_SCORE = 4
 
-PAPERS_PER_RUN = 2
+PAPERS_PER_RUN = 1         # 1 per run x Mon/Fri = 2 a week
 LOOKBACK_DAYS = 8          # comfortably covers the Mon/Fri gaps (3 and 4 days),
                            # so a slow stretch still has a pool to draw from.
                            # Overlap between runs is fine - dedupe handles it.

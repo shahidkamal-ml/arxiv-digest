@@ -1,7 +1,7 @@
 # Weekly arXiv digest
 
-Two relevant papers, emailed (or Telegrammed) to you every Monday and Friday.
-Runs on GitHub Actions, so there's no server and no cost.
+One relevant paper, emailed (or Telegrammed) to you every Monday and Friday —
+two a week. Runs on GitHub Actions, so there's no server and no cost.
 
 ## Repo layout
 
@@ -106,7 +106,7 @@ Everything you'd want to change is in the `CONFIG` block at the top of
 - `CATEGORIES` — arXiv categories to pull from
 - `KEYWORDS` — keyword → weight; title matches count double
 - `MIN_SCORE` — quality floor, so a slow week sends nothing rather than junk
-- `PAPERS_PER_RUN` — currently 2
+- `PAPERS_PER_RUN` — currently 1, sent on each of the two run days
 
 Raise `MIN_SCORE` if you're getting noise, lower it if you're getting silence.
 Watch the first few runs and adjust from there — keyword weights always need a
