@@ -1,7 +1,7 @@
 # Weekly arXiv digest
 
-Two relevant papers, emailed (or Telegrammed) to you every Monday. Runs on
-GitHub Actions, so there's no server and no cost.
+Two relevant papers, emailed (or Telegrammed) to you every Monday and Friday.
+Runs on GitHub Actions, so there's no server and no cost.
 
 ## Repo layout
 

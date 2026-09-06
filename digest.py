@@ -50,7 +50,9 @@ KEYWORDS = {
 MIN_SCORE = 4
 
 PAPERS_PER_RUN = 2
-LOOKBACK_DAYS = 8          # slight overlap with a 7-day cadence, dedupe handles it
+LOOKBACK_DAYS = 8          # comfortably covers the Mon/Fri gaps (3 and 4 days),
+                           # so a slow stretch still has a pool to draw from.
+                           # Overlap between runs is fine - dedupe handles it.
 MAX_FETCH = 400            # how many recent papers to consider
 STATE_FILE = Path("sent.json")
 

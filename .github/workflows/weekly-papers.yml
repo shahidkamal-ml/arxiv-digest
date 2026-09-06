@@ -2,9 +2,10 @@ name: Weekly paper digest
 
 on:
   schedule:
-    # Mondays at 13:00 UTC = 9am Eastern (EDT) / 8am (EST).
+    # Mondays and Fridays at 13:00 UTC = 9am Eastern (EDT) / 8am (EST).
+    # 1 = Monday, 5 = Friday.
     # GitHub cron is always UTC and can be delayed during peak load.
-    - cron: "0 13 * * 1"
+    - cron: "0 13 * * 1,5"
   workflow_dispatch:        # lets you trigger a test run by hand
 
 permissions:
