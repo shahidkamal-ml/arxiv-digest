@@ -15,6 +15,7 @@ import re
 import smtplib
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -306,16 +307,59 @@ def post_json(url, payload, headers, timeout=90):
         return json.loads(resp.read())
 
 
-def ask_gemini(prompt):
-    key = os.environ["GEMINI_API_KEY"]
-    model = os.environ.get("GEMINI_MODEL") or GEMINI_MODEL
+GEMINI_ROOT = "https://generativelanguage.googleapis.com/v1beta"
+
+
+def gemini_generate(model, prompt, key):
     data = post_json(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        f"{GEMINI_ROOT}/models/{model}:generateContent",
         {"contents": [{"parts": [{"text": prompt}]}]},
         {"x-goog-api-key": key},
     )
     parts = data["candidates"][0]["content"]["parts"]
     return "".join(p.get("text", "") for p in parts)
+
+
+def resolve_gemini_model(key):
+    """
+    Ask the API which models this key can actually use.
+
+    Google retires and renames these often enough that a hardcoded id goes
+    stale silently - it 404s and the digest quietly drops to heuristics. Rather
+    than guess, list what the key has and prefer a cheap stable flash model.
+    """
+    request = urllib.request.Request(
+        f"{GEMINI_ROOT}/models", headers={"x-goog-api-key": key}
+    )
+    with urllib.request.urlopen(request, timeout=30) as resp:
+        models = json.loads(resp.read()).get("models", [])
+
+    usable = [
+        m["name"].split("/", 1)[-1] for m in models
+        if "generateContent" in m.get("supportedGenerationMethods", [])
+    ]
+    stable = [m for m in usable if not re.search(r"preview|exp|thinking", m)]
+
+    for want in ("flash-latest", "flash"):
+        for name in sorted(stable or usable, reverse=True):
+            if want in name:
+                return name
+    return (stable or usable or [None])[0]
+
+
+def ask_gemini(prompt):
+    key = os.environ["GEMINI_API_KEY"]
+    model = os.environ.get("GEMINI_MODEL") or GEMINI_MODEL
+    try:
+        return gemini_generate(model, prompt, key)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            raise
+        resolved = resolve_gemini_model(key)
+        if not resolved:
+            raise RuntimeError("no Gemini model available to this key") from None
+        print(f"[info] {model} unavailable, using {resolved}", file=sys.stderr)
+        return gemini_generate(resolved, prompt, key)
 
 
 def ask_claude(prompt):
