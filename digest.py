@@ -63,10 +63,22 @@ KEYWORDS = {
     "video": 1,
 }
 
+# The feed query cross-lists, so a robotics or signal-processing paper can
+# arrive tagged cs.LG. Judge on the *primary* category instead: a paper filed
+# under cs.RO is doing robotics and borrowing the world-model vocabulary.
+PRIMARY_ALLOW = {"cs.CV", "cs.CL", "cs.LG", "cs.AI"}
+
 # "world model" alone drags in web agents, RL planners and LLM reasoning work.
-# A paper has to be about video/motion at all to count, so require one of these.
-REQUIRE_ANY = ["video", "motion", "frame", "temporal", "dynamic", "visual",
-               "physical", "spatial"]
+# Require a real video/motion term - "visual" and "physical" were too loose and
+# let a wireless-networking paper through on "visual observations".
+REQUIRE_ANY = ["video", "frame", "motion", "temporal", "spatiotemporal",
+               "optical flow"]
+
+# Vocabulary that reliably means a different field, whatever the title claims.
+EXCLUDE_ANY = ["wireless", "beamforming", "spectrum", "base station",
+               "teleoperation", "packet", "throughput", "channel state",
+               "resource allocation", "federated learning", "antenna",
+               "web agent", "gui agent", "portfolio", "molecul"]
 
 # arXiv puts acceptances in <arxiv:comment>/<arxiv:journal_ref> when they exist,
 # which for brand-new preprints is usually not yet. Treated as a bonus, never a
@@ -78,9 +90,10 @@ VENUE_RE = re.compile(
 VENUE_BONUS = 6
 
 # Drop anything scoring below this, even if it's the best of a weak week.
-# Tuned against a 600-paper sample: 16 yields ~12 candidates a week, so there
-# is real competition for the 2 slots rather than "whatever cleared the bar".
-MIN_SCORE = 16
+# The category/exclusion filters now do the relevance work, so this can be
+# looser than when it was the only gate: 12 keeps ~9 candidates per run for the
+# judge to choose between, instead of handing it whatever cleared a high bar.
+MIN_SCORE = 12
 
 PAPERS_PER_RUN = 1         # 1 per run x Mon/Fri = 2 a week
 SHORTLIST = 12             # top-scoring candidates handed to the novelty judge
@@ -233,6 +246,9 @@ def parse_entry(entry):
 
     paper_id = re.sub(r"v\d+$", "", raw_id.rsplit("/", 1)[-1])
 
+    node = entry.find("arxiv:primary_category", NS)
+    primary = node.get("term") if node is not None else ""
+
     return {
         "id": paper_id,
         "title": text("title"),
@@ -242,12 +258,19 @@ def parse_entry(entry):
         "url": f"https://arxiv.org/abs/{paper_id}",
         # Where an acceptance is announced, when the authors bother to say.
         "venue": (text("comment", "arxiv") + " " + text("journal_ref", "arxiv")).strip(),
+        "primary": primary,
     }
 
 
 def on_topic(paper):
     """Is this about video/motion at all, or just a world model of something?"""
+    if paper.get("primary") not in PRIMARY_ALLOW:
+        return False
+
     body = (paper["title"] + " " + paper["abstract"]).lower()
+    if any(term in body for term in EXCLUDE_ANY):
+        return False
+
     return any(term in body for term in REQUIRE_ANY)
 
 
@@ -272,7 +295,13 @@ JUDGE_PROMPT = """\
 You are triaging new arXiv preprints for a researcher who works on world \
 models, video LLMs, and motion understanding from video.
 
-They want genuinely new ideas. They do NOT want competent but incremental \
+Reject anything whose real subject is another field that has merely borrowed \
+world-model vocabulary - robot control, wireless or networking, autonomous \
+driving stacks, RL planning benchmarks. The paper must be about understanding \
+motion, dynamics or events from video. A paper can say "world model" and \
+"JEPA" throughout and still be a communications paper; rank those last.
+
+Then prefer genuinely new ideas. They do NOT want competent but incremental \
 work: a new benchmark number, another architecture tweak, a scaled-up \
 rerun, or a fine-tune of an existing model. Abstracts are written to sound \
 novel, so judge the actual claim, not the adjectives. Be sceptical - most \
